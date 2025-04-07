@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mario Kart 64 Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        #speedometer {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px #000000;
+        }
+
+        #debug {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-family: monospace;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="instructions">
+        <h2>Mario Kart 64 Controls:</h2>
+        <p>Arrow Up / W: Accelerate</p>
+        <p>Arrow Down / S: Brake/Reverse</p>
+        <p>Arrow Left / A: Turn Left</p>
+        <p>Arrow Right / D: Turn Right</p>
+        <p>Space: Hop (tap) / Drift (hold while turning)</p>
+        <p>Mini-turbo: Hold drift until sparks turn yellow, then release!</p>
+    </div>
+    <div id="speedometer">0 km/h</div>
+    <div id="debug"></div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.149.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+
+        // Debug element for troubleshooting
+        const debugEl = document.getElementById('debug');
+        function updateDebug(kart) {
+            debugEl.innerHTML = `
+                Speed: ${kart.speed.toFixed(2)}<br>
+                Rotation: ${kart.rotation.toFixed(2)}<br>
+                Position: ${kart.position.x.toFixed(1)}, ${kart.position.z.toFixed(1)}<br>
+                Hopping: ${kart.isHopping}<br>
+                HopHeight: ${kart.hopHeight.toFixed(2)}<br>
+                Drifting: ${kart.isDrifting}<br>
+                DriftDirection: ${kart.driftDirection}<br>
+                DriftTime: ${kart.driftTime}
+            `;
+        }
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x80C0FF); // Bright blue sky like MK64
+
+        // Create fog for distance effect (Mario Kart 64 had limited draw distance)
+        scene.fog = new THREE.Fog(0x80C0FF, 100, 300);
+
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Start position - actual position will be set in relation to kart
+        camera.position.set(0, 2, 5);
+
+        // Renderer setup
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Lights - Mario Kart 64 had strong directional lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(50, 100, 50);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 300;
+        directionalLight.shadow.camera.left = -100;
+        directionalLight.shadow.camera.right = 100;
+        directionalLight.shadow.camera.top = 100;
+        directionalLight.shadow.camera.bottom = -100;
+        scene.add(directionalLight);
+
+        // Ground - create a track that extends in the -Z direction (forward)
+        const trackLength = 2000;
+        const trackWidth = 25;
+
+        // Create track using segments to add some curvature like MK64
+        function createTrack() {
+            const trackGroup = new THREE.Group();
+            scene.add(trackGroup);
+
+            // Track material
+            const trackMaterial = new THREE.MeshStandardMaterial({
+                color: 0x555555,
+                roughness: 0.8,
+            });
+
+            // Create a series of track segments
+            let currentZ = 0;
+            let currentX = 0;
+            let currentRotation = 0;
+
+            for (let i = 0; i < 20; i++) {
+                // Determine if this segment should curve
+                let segmentLength = 100;
+                let curve = 0;
+
+                // Add some variety to the track
+                if (i > 5 && i < 8) {
+                    // Gentle curve to the right
+                    curve = -0.2;
+                } else if (i > 10 && i < 13) {
+                    // Gentle curve to the left
+                    curve = 0.2;
+                } else if (i === 15) {
+                    // Sharp turn (hairpin)
+                    curve = 0.5;
+                    segmentLength = 70;
+                }
+
+                // Create segment
+                const segmentGeometry = new THREE.PlaneGeometry(trackWidth, segmentLength);
+                const segment = new THREE.Mesh(segmentGeometry, trackMaterial);
+                segment.rotation.x = -Math.PI / 2;
+
+                // Position segment
+                segment.position.set(currentX, 0, currentZ - segmentLength / 2);
+                segment.rotation.z = currentRotation;
+                segment.receiveShadow = true;
+
+                trackGroup.add(segment);
+
+                // Add lane markings
+                for (let j = 0; j < segmentLength; j += 20) {
+                    if (j + 5 <= segmentLength) { // Make sure marking fits on segment
+                        const markingGeometry = new THREE.PlaneGeometry(1, 5);
+                        const markingMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+                        const marking = new THREE.Mesh(markingGeometry, markingMaterial);
+                        marking.rotation.x = -Math.PI / 2;
+
+                        // Position marking relative to segment
+                        const relativePos = j - segmentLength / 2 + 2.5;
+                        const markX = currentX + Math.sin(currentRotation) * relativePos;
+                        const markZ = currentZ - Math.cos(currentRotation) * relativePos;
+
+                        marking.position.set(markX, 0.05, markZ);
+                        marking.rotation.z = currentRotation;
+                        trackGroup.add(marking);
+                    }
+                }
+
+                // Update position for next segment
+                currentRotation += curve;
+                currentX += Math.sin(currentRotation) * segmentLength;
+                currentZ -= Math.cos(currentRotation) * segmentLength;
+
+                // Create grass beside the track
+                const grassMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x33aa33,
+                    roughness: 0.9,
+                });
+
+                // Left grass
+                const leftGrassGeometry = new THREE.PlaneGeometry(50, segmentLength);
+                const leftGrass = new THREE.Mesh(leftGrassGeometry, grassMaterial);
+                leftGrass.rotation.x = -Math.PI / 2;
+                leftGrass.position.set(
+                    currentX - Math.cos(currentRotation) * trackWidth / 2 - 25,
+                    -0.1,
+                    currentZ - segmentLength / 2 - Math.sin(currentRotation) * trackWidth / 2
+                );
+                leftGrass.rotation.z = currentRotation;
+                leftGrass.receiveShadow = true;
+                trackGroup.add(leftGrass);
+
+                // Right grass
+                const rightGrassGeometry = new THREE.PlaneGeometry(50, segmentLength);
+                const rightGrass = new THREE.Mesh(rightGrassGeometry, grassMaterial);
+                rightGrass.rotation.x = -Math.PI / 2;
+                rightGrass.position.set(
+                    currentX + Math.cos(currentRotation) * trackWidth / 2 + 25,
+                    -0.1,
+                    currentZ - segmentLength / 2 + Math.sin(currentRotation) * trackWidth / 2
+                );
+                rightGrass.rotation.z = currentRotation;
+                rightGrass.receiveShadow = true;
+                trackGroup.add(rightGrass);
+
+                // Add decorations - trees, etc.
+                addTrackDecorations(trackGroup, currentX, currentZ, currentRotation, segmentLength, trackWidth);
+            }
+        }
+
+        // Add decorative elements to the track
+        function addTrackDecorations(trackGroup, x, z, rotation, segmentLength, trackWidth) {
+            // Add trees on both sides
+            for (let i = 0; i < 3; i++) {
+                // Randomize positions a bit
+                const offset = Math.random() * segmentLength - segmentLength / 2;
+                const sideDistance = trackWidth / 2 + 10 + Math.random() * 20;
+
+                // Left side tree
+                const leftX = x - Math.cos(rotation) * sideDistance - Math.sin(rotation) * offset;
+                const leftZ = z - Math.sin(rotation) * sideDistance + Math.cos(rotation) * offset;
+                createTree(leftX, leftZ, trackGroup);
+
+                // Right side tree
+                const rightX = x + Math.cos(rotation) * sideDistance - Math.sin(rotation) * offset;
+                const rightZ = z + Math.sin(rotation) * sideDistance + Math.cos(rotation) * offset;
+                createTree(rightX, rightZ, trackGroup);
+            }
+
+            // Occasionally add a river crossing the track
+            if (Math.random() < 0.2) {
+                createRiver(x, z, rotation, trackWidth * 3, trackGroup);
+            }
+        }
+
+        // Create a tree with MK64-style flat billboard look
+        function createTree(x, z, parent) {
+            // MK64 used billboard trees
+            const treeGroup = new THREE.Group();
+
+            // Trunk - simple cylinder
+            const trunkGeometry = new THREE.CylinderGeometry(0.7, 1, 5, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(0, 2.5, 0);
+            trunk.castShadow = true;
+            treeGroup.add(trunk);
+
+            // Tree top - using a cone (MK64 used flat billboards, but this is a 3D approximation)
+            const topGeometry = new THREE.ConeGeometry(4, 8, 8);
+            const topMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22 });
+            const top = new THREE.Mesh(topGeometry, topMaterial);
+            top.position.set(0, 8, 0);
+            top.castShadow = true;
+            treeGroup.add(top);
+
+            treeGroup.position.set(x, 0, z);
+            parent.add(treeGroup);
+
+            return treeGroup;
+        }
+
+        // Create a river crossing
+        function createRiver(x, z, rotation, width, parent) {
+            const riverGeometry = new THREE.PlaneGeometry(width, 10);
+            const riverMaterial = new THREE.MeshStandardMaterial({
+                color: 0x4444ff,
+                transparent: true,
+                opacity: 0.7,
+            });
+            const river = new THREE.Mesh(riverGeometry, riverMaterial);
+            river.rotation.x = -Math.PI / 2;
+            river.rotation.z = rotation + Math.PI / 2; // Perpendicular to track
+            river.position.set(x, 0.1, z);
+            river.receiveShadow = true;
+            parent.add(river);
+        }
+
+        // Generate the track
+        createTrack();
+
+        // Create MK64-style kart
+        const kartGroup = new THREE.Group();
+        scene.add(kartGroup);
+
+        // Kart body - Using boxes to look like MK64's low-poly style
+        const bodyGeometry = new THREE.BoxGeometry(1.6, 0.5, 2.2);
+        const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Red like Mario's kart
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.position.y = 0.5;
+        body.castShadow = true;
+        kartGroup.add(body);
+
+        // Kart front
+        const frontGeometry = new THREE.BoxGeometry(1.2, 0.4, 0.5);
+        const frontMaterial = new THREE.MeshStandardMaterial({ color: 0xdd0000 });
+        const front = new THREE.Mesh(frontGeometry, frontMaterial);
+        front.position.set(0, 0.6, -1); // Front of kart
+        front.castShadow = true;
+        kartGroup.add(front);
+
+        // Driver seat/area
+        const seatGeometry = new THREE.BoxGeometry(1, 0.3, 0.8);
+        const seatMaterial = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+        const seat = new THREE.Mesh(seatGeometry, seatMaterial);
+        seat.position.set(0, 0.8, 0.3);
+        seat.castShadow = true;
+        kartGroup.add(seat);
+
+        // Simple driver (just a box)
+        const driverGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+        const driverMaterial = new THREE.MeshStandardMaterial({ color: 0x0000ff }); // Blue for simplicity
+        const driver = new THREE.Mesh(driverGeometry, driverMaterial);
+        driver.position.set(0, 1.2, 0.3);
+        driver.castShadow = true;
+        kartGroup.add(driver);
+
+        // Kart wheels - MK64 style positioning
+        function createWheel(x, z) {
+            const wheelGroup = new THREE.Group();
+
+            // MK64 wheels were simple cylinders
+            const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 8);
+            wheelGeometry.rotateZ(Math.PI / 2); // Align for proper rotation
+            const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheel.castShadow = true;
+            wheelGroup.add(wheel);
+
+            // Add simple hubcap
+            const hubGeometry = new THREE.CylinderGeometry(0.2, 0.2, 0.31, 8);
+            hubGeometry.rotateZ(Math.PI / 2);
+            const hubMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            const hub = new THREE.Mesh(hubGeometry, hubMaterial);
+            wheelGroup.add(hub);
+
+            wheelGroup.position.set(x, 0.4, z);
+            kartGroup.add(wheelGroup);
+            return wheelGroup;
+        }
+
+        // Create wheels - positioned like in MK64
+        const frontLeftWheel = createWheel(-0.8, -0.8);
+        const frontRightWheel = createWheel(0.8, -0.8);
+        const rearLeftWheel = createWheel(-0.8, 0.8);
+        const rearRightWheel = createWheel(0.8, 0.8);
+
+        // Kart physics - precise MK64 tuning values
+        const kart = {
+            // Position and movement
+            position: new THREE.Vector3(0, 0.4, 0),
+            velocity: new THREE.Vector3(0, 0, 0),
+            rotation: 0, // Forward is -Z direction
+            speed: 0,
+
+            // Physics tuning for exact MK64 feel
+            maxSpeed: 20,
+            maxReverseSpeed: 10,
+            acceleration: 0.25,      // MK64 had very immediate acceleration
+            deceleration: 1,      // And strong braking
+            baseGrip: 0.95,         // Slightly less grip for better sliding
+            turnSpeed: 0.03,        // Base turn speed
+
+            // Hop and drift mechanics
+            isHopping: false,
+            isDrifting: false,
+            hopHeight: 0,
+            hopSpeed: 0,
+            hopCooldown: 0,
+            preHopDirection: 0,
+            forwardDirection: new THREE.Vector2(0, -1),
+
+            // MK64 drift mini-turbo system
+            driftDirection: 0,
+            driftTime: 0,
+            driftAngle: 0,
+            driftIntensity: 0,
+
+            // Mini-turbo boost
+            miniTurbo: false,
+            miniTurboTime: 0,
+            miniTurboDirection: 0,
+
+            // MK64-specific physics properties
+            weightShift: 0,
+            wheelsTurningAngle: 0,
+            bodyLean: 0
+        };
+
+        // Create kart at start of track
+        kart.position.z = -10;
+        kartGroup.position.copy(kart.position);
+
+        // Set initial rotation to face down the track
+        kart.rotation = 0;  // Forward is -Z in Three.js
+        kartGroup.rotation.y = -kart.rotation;
+
+        // Controls state
+        const keys = {
+            ArrowUp: false,
+            ArrowDown: false,
+            ArrowLeft: false,
+            ArrowRight: false,
+            w: false,
+            s: false,
+            a: false,
+            d: false,
+            " ": false  // Space
+        };
+
+        // Event listeners for controls
+        window.addEventListener('keydown', (event) => {
+            if (keys.hasOwnProperty(event.key)) {
+                // Remember previous state to detect new key presses
+                const wasPressed = keys[event.key];
+                keys[event.key] = true;
+
+                // Detect new space press for hop (works regardless of turning state)
+                if (event.key === " " && !wasPressed && !kart.isHopping && kart.hopCooldown <= 0 && Math.abs(kart.speed) > 3) {
+                    kart.isHopping = true;
+                    kart.hopSpeed = 0.25; // MK64 hop height
+                    kart.hopHeight = 0;
+
+                    // Store turning direction when starting hop - fix for turning hop issue
+                    kart.preHopDirection = isTurningLeft() ? -1 : (isTurningRight() ? 1 : 0);
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (event) => {
+            if (keys.hasOwnProperty(event.key)) {
+                keys[event.key] = false;
+
+                // When releasing space during drift, check for mini-turbo
+                if (event.key === " " && kart.isDrifting) {
+                    if (kart.driftTime > 70) { // Yellow sparks threshold
+                        kart.miniTurbo = true;
+                        kart.miniTurboTime = 70; // Longer boost duration (was 50)
+
+                        // Store the current drift direction and visual orientation
+                        kart.miniTurboDirection = kart.rotation;
+                        if (kart.driftDirection !== 0) {
+                            // If drifting, apply the drift angle
+                            kart.miniTurboDirection += kart.driftDirection * 0.35 * kart.driftIntensity;
+                        }
+                    }
+                    // End drift
+                    kart.isDrifting = false;
+                    kart.driftTime = 0;
+                    kart.driftIntensity = 0;
+                }
+            }
+        });
+
+        // Helper functions for controls - exactly like MK64
+        function isAccelerating() {
+            return keys.ArrowUp || keys.w;
+        }
+
+        function isBraking() {
+            return keys.ArrowDown || keys.s;
+        }
+
+        function isTurningLeft() {
+            return keys.ArrowLeft || keys.a;
+        }
+
+        function isTurningRight() {
+            return keys.ArrowRight || keys.d;
+        }
+
+        function isDrifting() {
+            return keys[" "];
+        }
+
+        // Get speedometer element
+        const speedometer = document.getElementById('speedometer');
+
+        // Particles system for effects
+        const particles = [];
+
+        function createDriftParticle(color) {
+            const size = 0.2 + Math.random() * 0.2;
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: 0.8
+            });
+
+            const particle = new THREE.Mesh(geometry, material);
+
+            // Position behind the appropriate wheel based on drift direction
+            const wheelOffset = kart.driftDirection * 0.7;
+            particle.position.set(
+                kartGroup.position.x + Math.cos(kart.rotation + Math.PI / 2) * wheelOffset,
+                0.2,
+                kartGroup.position.z + Math.sin(kart.rotation + Math.PI / 2) * wheelOffset
+            );
+
+            scene.add(particle);
+
+            // Add to particles array with lifetime information
+            particles.push({
+                mesh: particle,
+                life: 12, // Frames of life
+                update: function () {
+                    this.life--;
+                    this.mesh.scale.multiplyScalar(0.92);
+                    this.mesh.material.opacity *= 0.9;
+
+                    if (this.life <= 0) {
+                        scene.remove(this.mesh);
+                        this.mesh.geometry.dispose();
+                        this.mesh.material.dispose();
+                        return true; // Ready for removal
+                    }
+                    return false;
+                }
+            });
+        }
+
+        function createBoostParticle() {
+            const size = 0.3 + Math.random() * 0.3;
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({
+                color: Math.random() > 0.5 ? 0xff8800 : 0xff4400,
+                transparent: true,
+                opacity: 0.7
+            });
+
+            const particle = new THREE.Mesh(geometry, material);
+
+            // Position behind the kart
+            particle.position.set(
+                kartGroup.position.x + (Math.random() * 0.8 - 0.4),
+                0.4 + Math.random() * 0.4,
+                kartGroup.position.z + Math.cos(kart.rotation) * (1 + Math.random() * 0.5)
+            );
+
+            scene.add(particle);
+
+            // Add to particles array with lifetime and behavior
+            particles.push({
+                mesh: particle,
+                life: 15,
+                update: function () {
+                    this.life--;
+                    this.mesh.position.y += 0.05;
+                    this.mesh.scale.multiplyScalar(1.05);
+                    this.mesh.material.opacity *= 0.85;
+
+                    if (this.life <= 0) {
+                        scene.remove(this.mesh);
+                        this.mesh.geometry.dispose();
+                        this.mesh.material.dispose();
+                        return true; // Ready for removal
+                    }
+                    return false;
+                }
+            });
+        }
+
+        // Update particles system
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const shouldRemove = particles[i].update();
+                if (shouldRemove) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Animation loop - MK64 ran at 30fps, but we'll use requestAnimationFrame
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // MK64 acceleration curve
+            if (isAccelerating()) {
+                if (kart.speed < 0) {
+                    // Immediate brake when in reverse
+                    kart.speed += kart.deceleration * 1.5;
+                } else {
+                    // MK64's signature acceleration curve
+                    let accelerationFactor = 1.0;
+
+                    if (kart.speed < 10) {
+                        accelerationFactor = 1.2; // Fast initial acceleration
+                    } else if (kart.speed < 20) {
+                        accelerationFactor = 0.8; // Slower mid-range
+                    } else {
+                        accelerationFactor = 0.4; // Very slow at high speed
+                    }
+
+                    kart.speed += kart.acceleration * accelerationFactor;
+
+                    // Mini-turbo boost effect
+                    if (kart.miniTurbo) {
+                        kart.maxSpeed = 30; // Boosted max speed during mini-turbo
+                        kart.speed += 0.6; // Substantial boost
+
+                        // Make speed decay more slowly after boost ends
+                        if (kart.miniTurboTime <= 0) {
+                            kart.maxSpeed = 25; // Still higher than normal max speed
+                            kart.miniTurbo = false;
+                        }
+                    }
+                    else if (kart.maxSpeed > 20) {
+                        // Gradually decrease max speed back to normal
+                        kart.maxSpeed -= 0.1;
+                        if (kart.maxSpeed < 20) {
+                            kart.maxSpeed = 20; // Normal max speed
+                        }
+                    }
+                    else {
+                        kart.maxSpeed = 20; // Normal max speed
+                    }
+                }
+
+                if (kart.speed > kart.maxSpeed) {
+                    kart.speed = kart.maxSpeed;
+                }
+            }
+
+            if (isBraking()) {
+                if (kart.speed > 0) {
+                    // MK64's strong braking
+                    kart.speed -= kart.deceleration;
+                    if (kart.speed < 0) {
+                        kart.speed = 0;
+                    }
+                } else {
+                    // Reverse speed (much slower than forward)
+                    kart.speed -= kart.acceleration * 0.5;
+                    if (kart.speed < -kart.maxReverseSpeed) {
+                        kart.speed = -kart.maxReverseSpeed;
+                    }
+                }
+            }
+
+            // Apply MK64-style friction
+            if (!isAccelerating() && !isBraking()) {
+                // MK64 had less friction at high speeds for longer slide-outs
+                const frictionFactor = Math.abs(kart.speed) > 20 ? 0.98 : kart.baseGrip;
+                kart.speed *= frictionFactor;
+
+                // Small deadzone to prevent creeping
+                if (Math.abs(kart.speed) < 0.1) {
+                    kart.speed = 0;
+                }
+            }
+
+            // Declare turnFactor at a higher scope to fix reference error
+            let turnFactor = 0;
+
+            // Handle turning - with authentic Mario Kart 64 steering characteristics
+            if (Math.abs(kart.speed) > 0.1) {
+                // Mario Kart 64 had very specific turning characteristics
+                const normalizedSpeed = Math.abs(kart.speed);
+
+                // MK64's three distinct turning zones
+                if (normalizedSpeed < 8) {
+                    // Zone 1: Extremely sharp turning at low speeds (famous for 180° turns)
+                    turnFactor = kart.turnSpeed * 3.0;
+                } else if (normalizedSpeed < 15) {
+                    // Zone 2: Medium turning at normal racing speeds
+                    turnFactor = kart.turnSpeed * 1.6;
+                } else {
+                    // Zone 3: Wide turning at top speeds (promotes drifting)
+                    turnFactor = kart.turnSpeed * 0.8;
+                }
+
+                // Adjust for reverse
+                if (kart.speed < 0) {
+                    turnFactor *= 0.6; // MK64 had reduced steering in reverse
+                }
+
+                // Track wheels turning visual (instant response like MK64)
+                const maxWheelAngle = 0.4;
+                kart.wheelsTurningAngle = (isTurningLeft() ? 1 : (isTurningRight() ? -1 : 0)) * maxWheelAngle;
+
+                // Apply wheel rotation
+                frontLeftWheel.rotation.y = kart.wheelsTurningAngle;
+                frontRightWheel.rotation.y = kart.wheelsTurningAngle;
+
+                // Handle MK64's distinctive drifting mechanics
+                if (kart.isHopping || kart.isDrifting) {
+                    // Check if we should start drifting
+                    if (isDrifting() && !kart.isHopping) {
+                        // During landing from hop or already drifting
+                        if (!kart.isDrifting) {
+                            // If just starting a drift after hop
+                            kart.isDrifting = true;
+
+                            // Use the pre-hop direction if available, otherwise current input
+                            if (kart.preHopDirection !== 0) {
+                                kart.driftDirection = kart.preHopDirection;
+                            } else if (isTurningLeft()) {
+                                kart.driftDirection = -1;
+                            } else if (isTurningRight()) {
+                                kart.driftDirection = 1;
+                            } else {
+                                // Default to the last turn input if nothing is being pressed
+                                kart.driftDirection = kart.driftDirection || 1;
+                            }
+
+                            // MK64 had an immediate slide on drift start
+                            kart.driftIntensity = 0.3;
+                        }
+
+                        // Accumulate drift time if already drifting
+                        kart.driftIntensity = Math.min(1, kart.driftIntensity + 0.04);
+                        kart.driftTime++;
+
+                        // Create drift particles with colors based on charge time
+                        if (Math.random() > 0.6 && kart.speed > 8) {
+                            let sparkColor;
+
+                            if (kart.driftTime < 40) {
+                                // Blue sparks
+                                sparkColor = 0x6666ff;
+                            } else if (kart.driftTime < 70) {
+                                // Red sparks
+                                sparkColor = 0xff6666;
+                            } else {
+                                // Yellow sparks (ready for mini-turbo)
+                                sparkColor = 0xffff00;
+                            }
+
+                            createDriftParticle(sparkColor);
+                        }
+
+                        // REDUCE turning during drift (instead of enhancing)
+                        turnFactor *= 0.5; // Nerf turning to 50% of normal
+
+                        // Reduce steering influence during drift
+                        const steeringInfluence = 0.1; // Half the previous value
+                        const currentDirection = isTurningLeft() ? -1 : (isTurningRight() ? 1 : 0);
+
+                        // Apply reduced steering influence to the drift direction
+                        if (currentDirection !== 0) {
+                            kart.driftAngle = (kart.driftDirection * 0.9) + (currentDirection * steeringInfluence);
+                        } else {
+                            kart.driftAngle = kart.driftDirection;
+                        }
+                    } else if (!isDrifting()) {
+                        // End drift if space is released
+                        kart.isDrifting = false;
+                        kart.driftDirection = 0;
+                        kart.driftAngle = 0;
+                        kart.driftIntensity = Math.max(0, kart.driftIntensity - 0.1);
+                        kart.driftTime = 0;
+                    }
+                }
+
+                // Apply turning - FIXED direction for correct steering
+                if (isTurningLeft()) {
+                    // Left turn (counter-clockwise) 
+                    kart.rotation -= turnFactor;
+
+                    // MK64 body lean during turns
+                    kart.bodyLean = Math.min(0.15, kart.bodyLean + 0.01);
+                } else if (isTurningRight()) {
+                    // Right turn (clockwise)
+                    kart.rotation += turnFactor;
+
+                    // MK64 body lean during turns (opposite direction)
+                    kart.bodyLean = Math.max(-0.15, kart.bodyLean - 0.01);
+                } else {
+                    // Return body to upright
+                    kart.bodyLean *= 0.85;
+                }
+            } else {
+                // Reset drift when stopped
+                kart.isDrifting = false;
+                kart.driftDirection = 0;
+                kart.driftAngle = 0;
+                kart.driftIntensity = 0;
+                kart.driftTime = 0;
+
+                // Reset body lean
+                kart.bodyLean *= 0.85;
+            }
+
+            // Handle hopping - authentic MK64 hop mechanics
+            if (kart.isHopping) {
+                kart.hopHeight += kart.hopSpeed;
+                kart.hopSpeed -= 0.019; // Precise MK64 gravity
+
+                // Capture turning input during hop for drift initiation
+                if (isTurningLeft()) {
+                    kart.preHopDirection = -1;
+                } else if (isTurningRight()) {
+                    kart.preHopDirection = 1;
+                }
+
+                // Check landing - with accurate MK64 hop timing
+                if (kart.hopHeight <= 0) {
+                    kart.hopHeight = 0;
+                    kart.isHopping = false;
+                    kart.hopCooldown = 8; // Exact MK64 hop cooldown
+
+                    // When landing, only start drift if a direction is pressed or was pressed during hop
+                    if (isDrifting() && Math.abs(kart.speed) > 3) {
+                        // Only initialize drift if there's a direction
+                        if (kart.preHopDirection !== 0 || isTurningLeft() || isTurningRight()) {
+                            kart.isDrifting = true;
+
+                            // Use stored direction from during the hop, or current direction
+                            if (kart.preHopDirection !== 0) {
+                                kart.driftDirection = kart.preHopDirection;
+                            } else if (isTurningLeft()) {
+                                kart.driftDirection = -1;
+                            } else if (isTurningRight()) {
+                                kart.driftDirection = 1;
+                            }
+
+                            // MK64's immediate drift slide effect
+                            kart.driftIntensity = 0.3;
+                        }
+                    }
+
+                    // Reset preHopDirection
+                    kart.preHopDirection = 0;
+                }
+            }
+
+            // Hop cooldown
+            if (kart.hopCooldown > 0) {
+                kart.hopCooldown--;
+            }
+
+            // Handle mini-turbo duration
+            if (kart.miniTurbo) {
+                kart.miniTurboTime--;
+
+                // Mini-turbo boost flames
+                if (Math.random() > 0.5) {
+                    createBoostParticle();
+                }
+
+                if (kart.miniTurboTime <= 0) {
+                    kart.miniTurbo = false;
+                }
+            }
+
+            // Update kart position based on velocity and exact MK64 physics
+            const moveAngle = kart.rotation; // Base movement direction
+
+            // MK64's signature drift sliding effect - critical for authentic feel
+            let slideAngle = moveAngle;
+            if (kart.isDrifting) {
+                // Reduce speed during drift (Mario Kart 64 style)
+                kart.speed *= 0.99; // Apply a small speed reduction each frame
+
+                // Calculate slide angle based on drift direction and intensity
+                // Uses drift angle which includes steering influence
+                slideAngle = moveAngle + (kart.driftAngle * 0.35 * kart.driftIntensity);
+
+            } else if (kart.miniTurbo) {
+                // When in mini-turbo state, align movement with the kart's visual direction
+                // This makes the kart go in the direction the wheels are pointing
+                // kartGroup.rotation.y contains the visual rotation including drift angle
+                slideAngle = -kartGroup.rotation.y; // Negative because of the coordinate system
+
+            }
+
+            // Calculate velocity components with drift slide - corrected direction
+            let finalMoveAngle = slideAngle;
+
+            // Special case for mini-turbo - use the VISUAL orientation of the kart
+            if (kart.miniTurbo) {
+                // Use the stored kart.rotation from when the drift ended
+                // This ensures the kart boosts forward in the direction it was facing
+                finalMoveAngle = kart.miniTurboDirection;
+            }
+
+            // Now calculate velocity with potentially updated angle
+            const velocityX = Math.sin(finalMoveAngle) * kart.speed;
+            const velocityZ = -Math.cos(finalMoveAngle) * kart.speed;
+
+            // MK64 movement speed scaling
+            const velocityMultiplier = 0.04;
+
+            // Update position - movement direction now matches visual rotation
+            kart.position.x += velocityX * velocityMultiplier;
+            kart.position.z += velocityZ * velocityMultiplier;
+
+            // Update kart model position and rotation
+            kartGroup.position.set(
+                kart.position.x,
+                kart.position.y + kart.hopHeight,
+                kart.position.z
+            );
+
+            // Apply rotation correctly to the kart model (negative to fix direction)
+            kartGroup.rotation.y = -kart.rotation;
+
+            // Visualize drift angle by adjusting model separately when drifting
+            if (kart.isDrifting) {
+                // Update the visual drift effect
+                const driftVisualAngle = -kart.driftDirection * 0.5 * kart.driftIntensity;
+                kartGroup.rotation.y = -kart.rotation + driftVisualAngle;
+
+                // Also add more body lean during drift
+                kartGroup.rotation.z += kart.driftDirection * 0.05 * kart.driftIntensity;
+
+                // Update the forward direction vector based on current visual direction
+                const currentAngle = kart.rotation - driftVisualAngle;
+                kart.forwardDirection.x = Math.sin(currentAngle);
+                kart.forwardDirection.y = -Math.cos(currentAngle);
+            }
+            else if (kart.miniTurbo) {
+                // During mini-turbo, maintain visual orientation matching the movement direction
+                kartGroup.rotation.y = -kart.miniTurboDirection;
+
+                // Update forward direction based on the boosting direction
+                kart.forwardDirection.x = Math.sin(kart.miniTurboDirection);
+                kart.forwardDirection.y = -Math.cos(kart.miniTurboDirection);
+
+                // Optional: Add a slight body lean for the boost effect
+                kartGroup.rotation.z = kart.driftDirection * 0.03;
+            }
+            else {
+                // When not drifting or boosting, just use normal rotation
+                kartGroup.rotation.y = -kart.rotation;
+
+                // Update forward direction with normal rotation
+                kart.forwardDirection.x = Math.sin(kart.rotation);
+                kart.forwardDirection.y = -Math.cos(kart.rotation);
+
+                // Return body lean to neutral
+                kartGroup.rotation.z *= 0.85;
+            }
+
+            // MK64 visual effects - kart tilting/leaning
+            kartGroup.rotation.z = kart.bodyLean; // Left/right lean in turns
+
+            // Animate wheel rotation based on speed
+            const wheelRotation = kart.speed * 0.05;
+            frontLeftWheel.children[0].rotation.x += wheelRotation;
+            frontRightWheel.children[0].rotation.x += wheelRotation;
+            rearLeftWheel.children[0].rotation.x += wheelRotation;
+            rearRightWheel.children[0].rotation.x += wheelRotation;
+
+            // Mario Kart 64 camera - perfectly behind kart
+            const cameraDistance = 7;
+
+            const angleForCamera = kart.miniTurbo ? 0.05 : 0.1;
+            const cameraBehindX = kart.position.x - Math.sin(kart.rotation) * cameraDistance;
+            const cameraBehindZ = kart.position.z + Math.cos(kart.rotation) * cameraDistance;
+
+            // MK64 camera with fixed follow behavior
+            camera.position.x += (cameraBehindX - camera.position.x) * 0.1;
+            camera.position.z += (cameraBehindZ - camera.position.z) * 0.1;
+
+            // Camera height stays consistent with a little hop effect
+            camera.position.y = kart.position.y + 3 + kart.hopHeight * 0.5;
+
+            // Look directly at the kart position plus offset forward
+            const lookAheadDistance = 10;
+            const lookAheadX = kart.position.x + Math.sin(kart.rotation) * lookAheadDistance;
+            const lookAheadZ = kart.position.z - Math.cos(kart.rotation) * lookAheadDistance;
+            const lookAheadY = kart.position.y + 1;
+
+            // Smoothly look at target point
+            camera.lookAt(lookAheadX, lookAheadY, lookAheadZ);
+
+            // Update particles
+            updateParticles();
+
+            // Update speedometer - MK64 displayed km/h
+            const speedKmh = Math.abs(Math.round(kart.speed * 3.6));
+            speedometer.textContent = `${speedKmh} km/h`;
+
+            // Update debug info
+            updateDebug(kart);
+
+            // Render the scene
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start the animation loop
+        animate();
+    </script>
+</body>
+
+</html>
