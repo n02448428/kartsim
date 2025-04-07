@@ -975,18 +975,9 @@
             // Mario Kart 64 camera - perfectly behind kart
             const cameraDistance = 7;
 
-            // Determine the angle to use for camera
-            let angleForCamera;
-            if (kart.miniTurbo || kart.miniTurboTime <= 0 && kart.miniTurboTime > -10) {
-                // During boost and for a short time after boost ends, use the mini-turbo direction
-                angleForCamera = kart.miniTurboDirection;
-            } else {
-                // Otherwise use normal rotation
-                angleForCamera = kart.rotation;
-            }
-
-            const cameraBehindX = kart.position.x - Math.sin(angleForCamera) * cameraDistance;
-            const cameraBehindZ = kart.position.z + Math.cos(angleForCamera) * cameraDistance;
+            const angleForCamera = kart.miniTurbo ? 0.05 : 0.1;
+            const cameraBehindX = kart.position.x - Math.sin(kart.rotation) * cameraDistance;
+            const cameraBehindZ = kart.position.z + Math.cos(kart.rotation) * cameraDistance;
 
             // MK64 camera with fixed follow behavior
             camera.position.x += (cameraBehindX - camera.position.x) * 0.1;
